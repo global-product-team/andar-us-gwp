@@ -1,7 +1,62 @@
 query CartValidationsGenerateRunInput {
+  buyerJourney {
+    step
+  }
+  shop {
+    localTime {
+      isCampaignPeriod: dateTimeBetween(
+        startDateTime: "2026-09-09T00:00:00"
+        endDateTime: "9999-12-31T23:59:59"
+      )
+    }
+    metaobject(
+      handle: {
+        type: "app--417617707009--gwp"
+        handle: "app--417617707009--gwp-gzaxwiiz"
+      }
+    ) {
+      condition_type: field(key: "condition_type") {
+        value
+      }
+    }
+  }
   cart {
+    buyerIdentity {
+      customer {
+        hasTags(tags: ["gwp-test"]) {
+          hasTag
+          tag
+        }
+      }
+    }
+    cost {
+      totalAmount {
+        amount
+        currencyCode
+      }
+    }
     lines {
-      quantity
+      cost {
+        subtotalAmount {
+          amount
+        }
+        totalAmount {
+          amount
+        }
+      }
+      discountAllocations {
+        discountedAmount {
+          amount
+        }
+      }
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          product {
+            id
+          }
+        }
+      }
     }
   }
 }
