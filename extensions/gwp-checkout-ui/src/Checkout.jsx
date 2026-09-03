@@ -422,7 +422,7 @@ function Extension() {
     syncGiftTier();
   }, [cartLines, giftProductIds, targetProductId, instructions, loading, collectionsLoading]);
 
-  // gift 수량 1로 고정
+  // gift는 product 기준 총 1개로 고정 (variant가 여러 개로 나뉘어 담겨도 합쳐서 1개)
   useEffect(() => {
     async function normalizeGiftQuantity() {
       if (isNormalizingGiftQtyRef.current) return;
@@ -432,18 +432,47 @@ function Extension() {
         isGiftProduct(line?.merchandise?.product?.id)
       );
 
-      const linesToFix = giftLines.filter((line) => line.quantity > 1);
+      if (!giftLines.length) return;
 
-      if (!linesToFix.length) return;
+      const linesByProduct = new Map();
+      for (const line of giftLines) {
+        const productId = line?.merchandise?.product?.id;
+        if (!linesByProduct.has(productId)) linesByProduct.set(productId, []);
+        linesByProduct.get(productId).push(line);
+      }
+
+      const linesToUpdate = [];
+      const linesToRemove = [];
+
+      for (const lines of linesByProduct.values()) {
+        const [keep, ...extra] = lines;
+
+        if (keep.quantity !== 1) linesToUpdate.push(keep);
+        if (extra.length) linesToRemove.push(...extra);
+      }
+
+      if (linesToRemove.length && !instructions?.lines?.canRemoveCartLine) {
+        // 삭제 권한이 없으면 이번 사이클은 건너뛰고 다음 변경을 기다림
+        return;
+      }
+
+      if (!linesToUpdate.length && !linesToRemove.length) return;
 
       isNormalizingGiftQtyRef.current = true;
 
       try {
-        for (const line of linesToFix) {
+        for (const line of linesToUpdate) {
           await shopify.applyCartLinesChange({
             type: "updateCartLine",
             id: line.id,
             quantity: 1,
+          });
+        }
+        for (const line of linesToRemove) {
+          await shopify.applyCartLinesChange({
+            type: "removeCartLine",
+            id: line.id,
+            quantity: line.quantity,
           });
         }
       } catch (error) {

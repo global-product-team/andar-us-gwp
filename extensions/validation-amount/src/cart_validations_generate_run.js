@@ -1,6 +1,6 @@
 // @ts-check
 
-const EGIFT_PRODUCT_ID = "";
+const EGIFT_PRODUCT_ID = "14858264871282";
 
 const GWP_CONDITIONS = [
   {
@@ -14,7 +14,7 @@ const GWP_CONDITIONS = [
 ];
 
 const ERROR_MESSAGE =
-  "error amount message.";
+  "Please select your gift option to proceed.";
 
 function getLineActualAmount(line) {
   const subtotal = Number(line?.cost?.subtotalAmount?.amount || 0);
@@ -33,15 +33,15 @@ export function cartValidationsGenerateRun(input) {
     return { operations: [{ validationAdd: { errors: [] } }] };
   }
 
-  // // 테스트 고객만 validation 동작
-  // const tagResults = input?.cart?.buyerIdentity?.customer?.hasTags ?? [];
-  // const isTestCustomer = tagResults.some(
-  //   (tag) => tag?.tag === "gwp-test" && tag?.hasTag === true
-  // );
+  // 테스트 고객만 validation 동작
+  const tagResults = input?.cart?.buyerIdentity?.customer?.hasTags ?? [];
+  const isTestCustomer = tagResults.some(
+    (tag) => tag?.tag === "gwp-test" && tag?.hasTag === true
+  );
 
-  // if (!isTestCustomer) {
-  //   return { operations: [{ validationAdd: { errors: [] } }] };
-  // }
+  if (!isTestCustomer) {
+    return { operations: [{ validationAdd: { errors: [] } }] };
+  }
 
   // ── 메타오브젝트에서 conditionTypes, 캠페인 기간 읽기 ────────
 

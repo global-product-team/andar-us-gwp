@@ -5,7 +5,7 @@ query CartValidationsGenerateRunInput {
   shop {
     localTime {
       isCampaignPeriod: dateTimeBetween(
-        startDateTime: "2026-09-09T00:00:00"
+        startDateTime: "2026-09-02T00:00:00"
         endDateTime: "9999-12-31T23:59:59"
       )
     }
