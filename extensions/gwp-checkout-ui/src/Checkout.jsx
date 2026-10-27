@@ -95,10 +95,15 @@ function Extension() {
     return gwp?.conditionTypes || [];
   }, [gwp]);
 
+  // 모든 조건 사은품 목록의 합집합 (사은품 라인 식별용)
   const giftProductIds = useMemo(() => {
-    return conditions
-      .map((condition) => condition.giftProduct?.id)
-      .filter(Boolean);
+    return [
+      ...new Set(
+        conditions.flatMap((condition) =>
+          condition.giftProducts.map((product) => product.id)
+        )
+      ),
+    ];
   }, [conditions]);
 
   // ── 조건 평가 함수 ──────────────────────────────────────────
@@ -350,37 +355,42 @@ function Extension() {
     giftProductIds,
   ]);
 
-  const targetProduct = eligibleCondition?.giftProduct || null;
-  const targetProductId = targetProduct?.id || null;
+  // 현재 충족한 조건의 사은품 목록 (이 중 정확히 1개가 카트에 있어야 함)
+  const eligibleGifts = eligibleCondition?.giftProducts || [];
+  const eligibleGiftIds = eligibleGifts.map((product) => product.id);
+  const eligibleGiftKey = eligibleGiftIds.join(",");
 
-  const targetVariantId = useMemo(() => {
-    if (!targetProduct) return null;
+  const eligibleGiftLines = cartLines.filter((line) =>
+    isEligibleGift(line?.merchandise?.product?.id)
+  );
 
-    const firstAvailableVariant =
-      targetProduct.variants.nodes.find((variant) => variant.availableForSale) ||
-      targetProduct.variants.nodes[0];
+  const eligibleGiftQuantity = eligibleGiftLines.reduce(
+    (sum, line) => sum + Number(line.quantity || 0),
+    0
+  );
 
-    return firstAvailableVariant?.id || null;
-  }, [targetProduct]);
-
-  const targetGiftLine = cartLines.find((line) => {
-    const productId = line?.merchandise?.product?.id;
-    return productId === targetProductId && isGiftProduct(productId);
-  });
+  const cartGiftProductId = eligibleGiftLines[0]?.merchandise?.product?.id || null;
+  const cartGiftVariantId = eligibleGiftLines[0]?.merchandise?.id || null;
 
   function isGiftProduct(productId) {
     return giftProductIds.includes(productId);
   }
 
+  function isEligibleGift(productId) {
+    return eligibleGiftIds.includes(productId);
+  }
+
+  // 사은품별 옵션 Select 초기값: 카트에 담긴 variant > 첫 번째 구매 가능한 variant
   useEffect(() => {
-    if (!targetProduct) {
-      setSelectedVariants({});
-      return;
+    const initial = {};
+    for (const product of eligibleGifts) {
+      initial[product.id] =
+        product.id === cartGiftProductId && cartGiftVariantId
+          ? cartGiftVariantId
+          : getDefaultVariant(product)?.id;
     }
-    if (targetVariantId) {
-      setSelectedVariants({ [targetProduct.id]: targetVariantId });
-    }
-  }, [targetProduct, targetVariantId]);
+    setSelectedVariants(initial);
+  }, [eligibleGiftKey, cartGiftProductId, cartGiftVariantId]);
 
   // 잘못된 tier의 gift 자동 제거
   useEffect(() => {
@@ -394,11 +404,9 @@ function Extension() {
         isGiftProduct(line?.merchandise?.product?.id)
       );
 
-      const linesToRemove = giftLines.filter((line) => {
-        const productId = line?.merchandise?.product?.id;
-        if (!targetProductId) return true;
-        return productId !== targetProductId;
-      });
+      const linesToRemove = giftLines.filter(
+        (line) => !isEligibleGift(line?.merchandise?.product?.id)
+      );
 
       if (!linesToRemove.length) return;
 
@@ -420,36 +428,21 @@ function Extension() {
     }
 
     syncGiftTier();
-  }, [cartLines, giftProductIds, targetProductId, instructions, loading, collectionsLoading]);
+  }, [cartLines, giftProductIds, eligibleGiftKey, instructions, loading, collectionsLoading]);
 
-  // gift는 product 기준 총 1개로 고정 (variant가 여러 개로 나뉘어 담겨도 합쳐서 1개)
+  // gift는 목록 전체 기준 총 1개로 고정 (여러 사은품/variant가 담겨도 첫 라인 1개만 남김)
   useEffect(() => {
     async function normalizeGiftQuantity() {
       if (isNormalizingGiftQtyRef.current) return;
+      if (isAddingRef.current) return; // Replace 진행 중에는 건너뜀
       if (!instructions?.lines?.canUpdateCartLine) return;
 
-      const giftLines = cartLines.filter((line) =>
-        isGiftProduct(line?.merchandise?.product?.id)
-      );
+      if (!eligibleGiftLines.length) return;
 
-      if (!giftLines.length) return;
+      const [keep, ...extra] = eligibleGiftLines;
 
-      const linesByProduct = new Map();
-      for (const line of giftLines) {
-        const productId = line?.merchandise?.product?.id;
-        if (!linesByProduct.has(productId)) linesByProduct.set(productId, []);
-        linesByProduct.get(productId).push(line);
-      }
-
-      const linesToUpdate = [];
-      const linesToRemove = [];
-
-      for (const lines of linesByProduct.values()) {
-        const [keep, ...extra] = lines;
-
-        if (keep.quantity !== 1) linesToUpdate.push(keep);
-        if (extra.length) linesToRemove.push(...extra);
-      }
+      const linesToUpdate = keep.quantity !== 1 ? [keep] : [];
+      const linesToRemove = extra;
 
       if (linesToRemove.length && !instructions?.lines?.canRemoveCartLine) {
         // 삭제 권한이 없으면 이번 사이클은 건너뛰고 다음 변경을 기다림
@@ -483,7 +476,7 @@ function Extension() {
     }
 
     normalizeGiftQuantity();
-  }, [cartLines, giftProductIds, instructions]);
+  }, [cartLines, eligibleGiftKey, instructions]);
 
   // ── GWP 데이터 fetch ─────────────────────────────────────────
 
@@ -578,7 +571,22 @@ function Extension() {
         return;
       }
 
-      setGwp(parseGwp(metaobject));
+      const parsed = parseGwp(metaobject);
+
+      // 이미지 placeholder 확인용
+      console.log(
+        "[GWP DEBUG] gift images",
+        parsed.conditions.flatMap((c) =>
+          c.giftProducts.map((p) => ({
+            condition: c.conditionTitle,
+            product: p.title,
+            featuredImage: p.featuredImage?.url || null,
+            variantImages: p.variants.nodes.map((v) => v.image?.url || null),
+          }))
+        )
+      );
+
+      setGwp(parsed);
     } catch (error) {
       console.error("fetchGwp error", error);
       setGwp(null);
@@ -657,8 +665,19 @@ function Extension() {
       // collection: getReferenceByKey(metaobject.fields, "collection"),
       // collectionOnly: fields.collection_only === "true",
       // collectionQuantity: fields.collection_quantity,
-      giftProduct: getReferenceByKey(metaobject.fields, "gift_product"),
+      giftProducts: toGiftList(metaobject.fields),
     };
+  }
+
+  // 사은품은 항상 배열: 1개면 단일 사은품, 2개 이상이면 N개 중 1개 선택
+  function toGiftList(fields) {
+    const listField = fields.find((f) => f.key === "gift_products");
+    return (listField?.references?.nodes || []).filter((p) => p?.id);
+  }
+
+  function getDefaultVariant(product) {
+    const variants = product?.variants?.nodes || [];
+    return variants.find((variant) => variant.availableForSale) || variants[0];
   }
 
   function parseConditionTypes(value) {
@@ -723,6 +742,34 @@ function Extension() {
     }
   }
 
+  // 기존 사은품 라인 제거 후 새 variant 추가
+  async function replaceGift(variantId) {
+    if (isAddingRef.current) return;
+
+    isAddingRef.current = true;
+    setIsAdding(true);
+
+    try {
+      for (const line of eligibleGiftLines) {
+        await shopify.applyCartLinesChange({
+          type: "removeCartLine",
+          id: line.id,
+          quantity: line.quantity,
+        });
+      }
+      await shopify.applyCartLinesChange({
+        type: "addCartLine",
+        merchandiseId: variantId,
+        quantity: 1,
+      });
+    } catch (error) {
+      console.error("replaceGift error", error);
+    } finally {
+      isAddingRef.current = false;
+      setIsAdding(false);
+    }
+  }
+
   function handleVariantChange(productId, variantId) {
     setSelectedVariants((prev) => ({ ...prev, [productId]: variantId }));
   }
@@ -734,14 +781,18 @@ function Extension() {
     if (loading || collectionsLoading) return { behavior: "allow" };
     if (!eligibleCondition) return { behavior: "allow" };
 
-    const hasGwp = cartLines.some(
-      (line) => line?.merchandise?.product?.id === targetProductId
-    );
-
-    if (!hasGwp) {
+    // 목록 중 정확히 1개 (quantity 합산)
+    if (eligibleGiftQuantity === 0) {
       return {
         behavior: "block",
         reason: "Please select your complimentary anniversary gift before completing checkout.",
+      };
+    }
+
+    if (eligibleGiftQuantity > 1) {
+      return {
+        behavior: "block",
+        reason: "Only one complimentary gift can be added per order.",
       };
     }
 
@@ -761,82 +812,200 @@ function Extension() {
   }
 
   if (!eligibleCondition) return null;
-  if (!targetProduct) return null;
-  if (targetGiftLine) return null;
+  if (!eligibleGifts.length) return null;
 
-  const variants = targetProduct.variants.nodes;
-  const defaultVariant =
-    variants.find((variant) => variant.availableForSale) || variants[0];
+  const isMultiGift = eligibleGifts.length > 1;
 
-  const selectedVariantId = selectedVariants[targetProduct.id] || defaultVariant?.id;
-  const selectedVariant = variants.find((variant) => variant.id === selectedVariantId);
+  // 사은품 1개: 담은 뒤에는 기존처럼 숨김 (옵션 변경은 line edit 기능 사용)
+  if (!isMultiGift && eligibleGiftLines.length) return null;
 
-  if (!selectedVariant) return null;
+  // 사은품 1개: 기존 레이아웃 (이미지 | 옵션 Select + ADD)
+  function renderSingleGift(product) {
+    const variants = product.variants.nodes;
+    const selectedVariantId =
+      selectedVariants[product.id] || getDefaultVariant(product)?.id;
+    const selectedVariant = variants.find((variant) => variant.id === selectedVariantId);
+
+    if (!selectedVariant) return null;
+
+    return (
+      <s-grid
+        gridTemplateColumns="auto minmax(0, 1fr)"
+        gap="base"
+        alignItems="center"
+      >
+        <s-product-thumbnail
+          src={selectedVariant?.image?.url || product.featuredImage?.url}
+        />
+
+        <s-grid
+          gridTemplateColumns="minmax(0, 1fr) auto"
+          gap="small-100"
+          alignItems="end"
+        >
+          <s-box minInlineSize="0">
+            <s-select
+              label="Option"
+              value={selectedVariantId}
+              onChange={(event) =>
+                handleVariantChange(product.id, event.target.value)
+              }
+            >
+              {variants.map((variant) => (
+                <s-option key={variant.id} value={variant.id}>
+                  {variant.title}
+                </s-option>
+              ))}
+            </s-select>
+          </s-box>
+
+          {isInCart(selectedVariantId) ? (
+            <s-box>
+              <s-text>1 item added</s-text>
+            </s-box>
+          ) : (
+            <s-button
+              size="small"
+              variant="primary"
+              disabled={
+                isAdding ||
+                !selectedVariant?.availableForSale ||
+                !instructions?.lines?.canAddCartLine
+              }
+              onClick={() => addToCart(selectedVariantId)}
+            >
+              ADD
+            </s-button>
+          )}
+        </s-grid>
+      </s-grid>
+    );
+  }
+
+  // 사은품 2개 이상 카드: 이미지 | 상품명 + 옵션 Select | 버튼
+  function renderGiftRow(product) {
+    const variants = product.variants.nodes;
+    const selectedVariantId =
+      selectedVariants[product.id] || getDefaultVariant(product)?.id;
+    const selectedVariant = variants.find((variant) => variant.id === selectedVariantId);
+
+    if (!selectedVariant) return null;
+
+    const isSelectedInCart = isInCart(selectedVariantId);
+    const hasOtherGift = !isSelectedInCart && eligibleGiftLines.length > 0;
+
+    // 담긴 사은품 카드는 두꺼운 테두리 + 흰 배경 + 체크 배지로 강조
+    return (
+      <s-box
+        key={product.id}
+        background={isSelectedInCart ? "base" : undefined}
+        borderWidth={isSelectedInCart ? "large-100" : "base"}
+        borderRadius="base"
+        padding="base"
+      >
+        {/* 이미지 | 상품명 / (옵션 Select + 버튼 같은 줄) */}
+        <s-grid
+          gridTemplateColumns="auto minmax(0, 1fr)"
+          gap="base"
+          alignItems="center"
+        >
+          <s-product-thumbnail
+            src={selectedVariant?.image?.url || product.featuredImage?.url}
+          />
+
+          <s-box minInlineSize="0">
+            <s-stack gap="small-200">
+              <s-text emphasis="bold">{product.title}</s-text>
+
+              {/* 버튼 칸은 내용 크기만 차지 → 옵션 Select가 남는 폭을 채움 */}
+              <s-grid
+                gridTemplateColumns="minmax(0, 1fr) auto"
+                gap="small-100"
+                alignItems="center"
+              >
+                <s-box minInlineSize="0">
+                  <s-select
+                    label="Option"
+                    value={selectedVariantId}
+                    onChange={(event) =>
+                      handleVariantChange(product.id, event.target.value)
+                    }
+                  >
+                    {variants.map((variant) => (
+                      <s-option key={variant.id} value={variant.id}>
+                        {variant.title}
+                      </s-option>
+                    ))}
+                  </s-select>
+                </s-box>
+
+                {isSelectedInCart ? (
+                  <s-stack direction="inline" alignItems="center" gap="small-200">
+                    <s-icon type="check-circle" tone="success" size="small" />
+                    <s-text tone="success">Added</s-text>
+                  </s-stack>
+                ) : hasOtherGift ? (
+                  <s-button
+                    inlineSize="fit-content"
+                    variant="secondary"
+                    disabled={
+                      isAdding ||
+                      !selectedVariant?.availableForSale ||
+                      !instructions?.lines?.canAddCartLine ||
+                      !instructions?.lines?.canRemoveCartLine
+                    }
+                    onClick={() => replaceGift(selectedVariantId)}
+                  >
+                    Replace
+                  </s-button>
+                ) : (
+                  <s-button
+                    inlineSize="fit-content"
+                    variant="primary"
+                    disabled={
+                      isAdding ||
+                      !selectedVariant?.availableForSale ||
+                      !instructions?.lines?.canAddCartLine
+                    }
+                    onClick={() => addToCart(selectedVariantId)}
+                  >
+                    ADD
+                  </s-button>
+                )}
+              </s-grid>
+            </s-stack>
+          </s-box>
+        </s-grid>
+      </s-box>
+    );
+  }
 
   return (
     <s-box background="subdued" borderRadius="base" borderWidth="base" padding="base">
       <s-section>
         <s-stack gap="small-100">
           <s-text size="medium" emphasis="bold">
-            YOUR COMPLIMENTARY GIFT 
+            YOUR COMPLIMENTARY GIFT
           </s-text>
 
-          <s-stack gap="none">
-            <s-text>Your order is eligible for the gift below.</s-text>
-            <s-text>Select your option to add it to your order.</s-text>
-          </s-stack>
+          {isMultiGift ? (
+            <s-box paddingBlockEnd="small-100">
+              <s-text>Choose 1 of {eligibleGifts.length} complimentary gifts.</s-text>
+            </s-box>
+          ) : (
+            <s-stack gap="none">
+              <s-text>Your order is eligible for the gift below.</s-text>
+              <s-text>Select your option to add it to your order.</s-text>
+            </s-stack>
+          )}
 
-          <s-grid
-            gridTemplateColumns="auto minmax(0, 1fr)"
-            gap="base"
-            alignItems="center"
-          >
-            <s-product-thumbnail
-              src={selectedVariant?.image?.url || targetProduct.featuredImage?.url}
-            />
-
-            <s-grid
-              gridTemplateColumns="minmax(0, 1fr) auto"
-              gap="small-100"
-              alignItems="end"
-            >
-              <s-box minInlineSize="0">
-                <s-select
-                  label="Option"
-                  value={selectedVariantId}
-                  onChange={(event) =>
-                    handleVariantChange(targetProduct.id, event.target.value)
-                  }
-                >
-                  {variants.map((variant) => (
-                    <s-option key={variant.id} value={variant.id}>
-                      {variant.title} - {variant.price.amount}{" "}
-                      {variant.price.currencyCode}
-                    </s-option>
-                  ))}
-                </s-select>
-              </s-box>
-
-              {isInCart(selectedVariantId) ? (
-                <s-box>
-                  <s-text>1 item added</s-text>
-                </s-box>
-              ) : (
-                <s-button
-                  size="small"
-                  variant="primary"
-                  disabled={
-                    isAdding ||
-                    !selectedVariant?.availableForSale ||
-                    !instructions?.lines?.canAddCartLine
-                  }
-                  onClick={() => addToCart(selectedVariantId)}
-                >
-                  ADD
-                </s-button>
-              )}
-            </s-grid>
-          </s-grid>
+          {isMultiGift ? (
+            <s-stack gap="small-100">
+              {eligibleGifts.map((product) => renderGiftRow(product))}
+            </s-stack>
+          ) : (
+            renderSingleGift(eligibleGifts[0])
+          )}
         </s-stack>
       </s-section>
     </s-box>

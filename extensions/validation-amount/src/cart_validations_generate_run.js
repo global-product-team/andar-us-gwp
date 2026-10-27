@@ -5,11 +5,15 @@ const EGIFT_PRODUCT_ID = "gid://shopify/Product/14858264871282";
 const GWP_CONDITIONS = [
   {
     thresholdAmount: 150,
-    giftProductId: "gid://shopify/Product/14824060748146",
+    giftProductIds: ["gid://shopify/Product/14824060748146"],
   },
   {
     thresholdAmount: 300,
-    giftProductId: "gid://shopify/Product/15180028641650",
+    giftProductIds: [
+      "gid://shopify/Product/14777830834546",
+      "gid://shopify/Product/15180028641650",
+      "gid://shopify/Product/15245871448434",
+    ],
   },
 ];
 
@@ -78,13 +82,6 @@ export function cartValidationsGenerateRun(input) {
 
   const totalAmount = cartTotalAmount - eGiftAmount;
 
-  const cartProductIds = cartLines
-    .map((line) => {
-      if (line?.merchandise?.__typename !== "ProductVariant") return null;
-      return line?.merchandise?.product?.id ?? null;
-    })
-    .filter(Boolean);
-
   // ── currency 필터 후 threshold 내림차순 정렬 ──────────────
 
   const sortedConditions = [...GWP_CONDITIONS]
@@ -101,9 +98,16 @@ export function cartValidationsGenerateRun(input) {
     return { operations: [{ validationAdd: { errors: [] } }] };
   }
 
-  const hasGift = cartProductIds.includes(eligibleCondition.giftProductId);
+  // 목록 중 정확히 1개 (quantity 합산, 2개 이상도 차단)
+  const giftQuantity = cartLines.reduce((sum, line) => {
+    if (line?.merchandise?.__typename !== "ProductVariant") return sum;
+    if (!eligibleCondition.giftProductIds.includes(line?.merchandise?.product?.id)) return sum;
+    return sum + Number(line?.quantity || 0);
+  }, 0);
 
-  const errors = hasGift
+  const hasOneGift = giftQuantity === 1;
+
+  const errors = hasOneGift
     ? []
     : [{ message: ERROR_MESSAGE, target: "$.cart" }];
 
