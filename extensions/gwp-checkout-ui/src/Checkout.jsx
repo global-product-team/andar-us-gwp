@@ -15,6 +15,8 @@ export default function extension() {
 const GWP_HANDLE = "app--417617707009--gwp-gzaxwiiz";
 const GWP_TYPE = "app--417617707009--gwp";
 const EGIFT_PRODUCT_ID = "gid://shopify/Product/14858264871282";
+// 사은품 2개 이상일 때 레이아웃: "radio"(라디오 선택) | "card"(카드 리스트)
+const MULTI_GIFT_LAYOUT = "radio";
 
 function Extension() {
   const cartLines = useCartLines();
@@ -44,7 +46,9 @@ function Extension() {
   // GWP condition type: collection 비활성화로 인해 주석 처리
   // const [productsWithCollections, setProductsWithCollections] = useState([]);
   const [selectedVariants, setSelectedVariants] = useState({});
+  const [selectedGiftId, setSelectedGiftId] = useState(null); // 라디오 레이아웃용
   const [isAdding, setIsAdding] = useState(false);
+  const [addingVariantId, setAddingVariantId] = useState(null); // 로딩 표시할 버튼
 
   // const [debugInfo, setDebugInfo] = useState("");
 
@@ -377,6 +381,17 @@ function Extension() {
   function isEligibleGift(productId) {
     return eligibleGiftIds.includes(productId);
   }
+
+  // 라디오 초기값: 카트에 담긴 사은품 > 현재 선택 유지 > 첫 번째 사은품
+  // ADD / Replace 진행 중(제거 → 추가 사이)에는 선택을 바꾸지 않음
+  useEffect(() => {
+    if (isAddingRef.current) return;
+    setSelectedGiftId((prev) => {
+      if (cartGiftProductId) return cartGiftProductId;
+      if (eligibleGiftIds.includes(prev)) return prev;
+      return eligibleGifts[0]?.id || null;
+    });
+  }, [eligibleGiftKey, cartGiftProductId]);
 
   // 사은품별 옵션 Select 초기값: 카트에 담긴 variant > 첫 번째 구매 가능한 variant
   useEffect(() => {
@@ -735,6 +750,7 @@ function Extension() {
 
     isAddingRef.current = true;
     setIsAdding(true);
+    setAddingVariantId(variantId);
 
     try {
       await shopify.applyCartLinesChange({
@@ -745,6 +761,7 @@ function Extension() {
     } finally {
       isAddingRef.current = false;
       setIsAdding(false);
+      setAddingVariantId(null);
     }
   }
 
@@ -754,6 +771,7 @@ function Extension() {
 
     isAddingRef.current = true;
     setIsAdding(true);
+    setAddingVariantId(variantId);
 
     try {
       for (const line of eligibleGiftLines) {
@@ -773,6 +791,7 @@ function Extension() {
     } finally {
       isAddingRef.current = false;
       setIsAdding(false);
+      setAddingVariantId(null);
     }
   }
 
@@ -907,7 +926,6 @@ function Extension() {
     if (!selectedVariant) return null;
 
     const isSelectedInCart = isInCart(selectedVariantId);
-    const hasOtherGift = !isSelectedInCart && eligibleGiftLines.length > 0;
 
     // 담긴 사은품 카드는 두꺼운 테두리 + 흰 배경 + 체크 배지로 강조
     return (
@@ -933,28 +951,128 @@ function Extension() {
               <s-text emphasis="bold">{product.title}</s-text>
 
               {/* 버튼 칸은 내용 크기만 차지 → 옵션 Select가 남는 폭을 채움 */}
+              {renderOptionRow(product, selectedVariant)}
+            </s-stack>
+          </s-box>
+        </s-grid>
+      </s-box>
+    );
+  }
+
+  // 옵션 Select + 버튼(ADD / Replace / Added) 한 줄 (카드·라디오 공용)
+  // 버튼 칸은 내용 크기만 차지 → 옵션 Select가 남는 폭을 채움
+  // showAdded: false면 Added 표시 생략 (라디오는 상품명 줄 오른쪽에 이미 표시)
+  function renderOptionRow(product, selectedVariant, showAdded = true) {
+    const variants = product.variants.nodes;
+    const selectedVariantId = selectedVariant.id;
+    const isSelectedInCart = isInCart(selectedVariantId);
+    const hasOtherGift = !isSelectedInCart && eligibleGiftLines.length > 0;
+
+    return (
+      <s-grid
+        gridTemplateColumns="minmax(0, 1fr) auto"
+        gap="small-100"
+        alignItems="center"
+      >
+        <s-box minInlineSize="0">
+          <s-select
+            label="Option"
+            value={selectedVariantId}
+            onChange={(event) =>
+              handleVariantChange(product.id, event.target.value)
+            }
+          >
+            {variants.map((variant) => (
+              <s-option key={variant.id} value={variant.id}>
+                {variant.title}
+              </s-option>
+            ))}
+          </s-select>
+        </s-box>
+
+        {isSelectedInCart ? (
+          showAdded ? (
+            <s-stack direction="inline" alignItems="center" gap="small-200">
+              <s-icon type="check-circle" tone="success" size="small" />
+              <s-text tone="success">Added</s-text>
+            </s-stack>
+          ) : (
+            <s-box />
+          )
+        ) : hasOtherGift ? (
+          <s-button
+            inlineSize="fit-content"
+            variant="secondary"
+            loading={addingVariantId === selectedVariantId}
+            disabled={
+              isAdding ||
+              !selectedVariant?.availableForSale ||
+              !instructions?.lines?.canAddCartLine ||
+              !instructions?.lines?.canRemoveCartLine
+            }
+            onClick={() => replaceGift(selectedVariantId)}
+          >
+            Replace
+          </s-button>
+        ) : (
+          <s-button
+            inlineSize="fit-content"
+            variant="primary"
+            loading={addingVariantId === selectedVariantId}
+            disabled={
+              isAdding ||
+              !selectedVariant?.availableForSale ||
+              !instructions?.lines?.canAddCartLine
+            }
+            onClick={() => addToCart(selectedVariantId)}
+          >
+            ADD
+          </s-button>
+        )}
+      </s-grid>
+    );
+  }
+
+  // 사은품 2개 이상 라디오: 사은품을 라디오로 고르고, 선택된 항목 아래에만 옵션 Select + 버튼 표시
+  // 라디오 선택은 화면 상태일 뿐, 카트 변경은 ADD / Replace 버튼으로만 일어남
+  function renderGiftRadioList() {
+    const activeGiftId = eligibleGiftIds.includes(selectedGiftId)
+      ? selectedGiftId
+      : eligibleGiftIds[0];
+
+    return (
+      <s-choice-list
+        name="gwp-gift"
+        label="Choose your gift"
+        labelAccessibilityVisibility="exclusive"
+        values={[activeGiftId]}
+        onChange={(event) => setSelectedGiftId(event.currentTarget.values[0])}
+      >
+        {eligibleGifts.map((product) => {
+          const selectedVariantId =
+            selectedVariants[product.id] || getDefaultVariant(product)?.id;
+          const selectedVariant = product.variants.nodes.find(
+            (variant) => variant.id === selectedVariantId,
+          );
+          const isGiftInCart = eligibleGiftLines.some(
+            (line) => line?.merchandise?.product?.id === product.id,
+          );
+
+          return (
+            <s-choice key={product.id} value={product.id}>
+              {/* 이미지 | 상품명 | 담긴 사은품이면 맨 오른쪽에 Added */}
               <s-grid
-                gridTemplateColumns="minmax(0, 1fr) auto"
-                gap="small-100"
+                gridTemplateColumns="auto minmax(0, 1fr) auto"
+                gap="base"
                 alignItems="center"
               >
-                <s-box minInlineSize="0">
-                  <s-select
-                    label="Option"
-                    value={selectedVariantId}
-                    onChange={(event) =>
-                      handleVariantChange(product.id, event.target.value)
-                    }
-                  >
-                    {variants.map((variant) => (
-                      <s-option key={variant.id} value={variant.id}>
-                        {variant.title}
-                      </s-option>
-                    ))}
-                  </s-select>
-                </s-box>
-
-                {isSelectedInCart ? (
+                <s-product-thumbnail
+                  src={
+                    selectedVariant?.image?.url || product.featuredImage?.url
+                  }
+                />
+                <s-text>{product.title}</s-text>
+                {isGiftInCart ? (
                   <s-stack
                     direction="inline"
                     alignItems="center"
@@ -963,39 +1081,20 @@ function Extension() {
                     <s-icon type="check-circle" tone="success" size="small" />
                     <s-text tone="success">Added</s-text>
                   </s-stack>
-                ) : hasOtherGift ? (
-                  <s-button
-                    inlineSize="fit-content"
-                    variant="secondary"
-                    disabled={
-                      isAdding ||
-                      !selectedVariant?.availableForSale ||
-                      !instructions?.lines?.canAddCartLine ||
-                      !instructions?.lines?.canRemoveCartLine
-                    }
-                    onClick={() => replaceGift(selectedVariantId)}
-                  >
-                    Replace
-                  </s-button>
                 ) : (
-                  <s-button
-                    inlineSize="fit-content"
-                    variant="primary"
-                    disabled={
-                      isAdding ||
-                      !selectedVariant?.availableForSale ||
-                      !instructions?.lines?.canAddCartLine
-                    }
-                    onClick={() => addToCart(selectedVariantId)}
-                  >
-                    ADD
-                  </s-button>
+                  <s-box />
                 )}
               </s-grid>
-            </s-stack>
-          </s-box>
-        </s-grid>
-      </s-box>
+
+              {selectedVariant && (
+                <s-box slot="selected-content">
+                  {renderOptionRow(product, selectedVariant, false)}
+                </s-box>
+              )}
+            </s-choice>
+          );
+        })}
+      </s-choice-list>
     );
   }
 
@@ -1027,9 +1126,13 @@ function Extension() {
           )}
 
           {isMultiGift ? (
-            <s-stack gap="small-100">
-              {eligibleGifts.map((product) => renderGiftRow(product))}
-            </s-stack>
+            MULTI_GIFT_LAYOUT === "radio" ? (
+              renderGiftRadioList()
+            ) : (
+              <s-stack gap="small-100">
+                {eligibleGifts.map((product) => renderGiftRow(product))}
+              </s-stack>
+            )
           ) : (
             renderSingleGift(eligibleGifts[0])
           )}
