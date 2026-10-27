@@ -15,6 +15,8 @@ export default function extension() {
 const GWP_HANDLE = "app--417617707009--gwp-gzaxwiiz";
 const GWP_TYPE = "app--417617707009--gwp";
 const EGIFT_PRODUCT_ID = "gid://shopify/Product/14858264871282";
+// 사은품 2개 이상일 때 레이아웃: "radio"(라디오 선택) | "card"(카드 리스트)
+const MULTI_GIFT_LAYOUT = "radio";
 
 function Extension() {
   const cartLines = useCartLines();
@@ -36,10 +38,7 @@ function Extension() {
     //   cartTotal: total?.amount, // useTotalAmount()
     // });
     console.log("[GWP DEBUG] cartLines", cartLines);
-    
-    
   }, [cartLines, total]);
- 
 
   const [gwp, setGwp] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -47,7 +46,9 @@ function Extension() {
   // GWP condition type: collection 비활성화로 인해 주석 처리
   // const [productsWithCollections, setProductsWithCollections] = useState([]);
   const [selectedVariants, setSelectedVariants] = useState({});
+  const [selectedGiftId, setSelectedGiftId] = useState(null); // 라디오 레이아웃용
   const [isAdding, setIsAdding] = useState(false);
+  const [addingVariantId, setAddingVariantId] = useState(null); // 로딩 표시할 버튼
 
   // const [debugInfo, setDebugInfo] = useState("");
 
@@ -60,7 +61,7 @@ function Extension() {
     }, 0);
 
     return Number(total?.amount || 0) - egiftAmount;
-  }, [cartLines, total])
+  }, [cartLines, total]);
   const currencyCode = "USD";
 
   // GWP condition type: product/collection 비활성화로 인해 주석 처리
@@ -95,10 +96,15 @@ function Extension() {
     return gwp?.conditionTypes || [];
   }, [gwp]);
 
+  // 모든 조건 사은품 목록의 합집합 (사은품 라인 식별용)
   const giftProductIds = useMemo(() => {
-    return conditions
-      .map((condition) => condition.giftProduct?.id)
-      .filter(Boolean);
+    return [
+      ...new Set(
+        conditions.flatMap((condition) =>
+          condition.giftProducts.map((product) => product.id),
+        ),
+      ),
+    ];
   }, [conditions]);
 
   // ── 조건 평가 함수 ──────────────────────────────────────────
@@ -255,7 +261,6 @@ function Extension() {
 
   // ────────────────────────────────────────────────────────────
 
-
   const eligibleCondition = useMemo(() => {
     if (!gwp) return null;
     if (!conditionTypes.length) return null;
@@ -266,7 +271,8 @@ function Extension() {
     //   conditions.some((c) => c.collectionOnly);
 
     // if (hasCollectionCondition && collectionsLoading) return null;
-    if (!isWithinCampaignPeriod(gwp.startDatetime, gwp.endDatetime)) return null;
+    if (!isWithinCampaignPeriod(gwp.startDatetime, gwp.endDatetime))
+      return null;
 
     const filtered = conditions.filter((condition) => {
       if (conditionTypes.includes("amount")) {
@@ -350,55 +356,70 @@ function Extension() {
     giftProductIds,
   ]);
 
-  const targetProduct = eligibleCondition?.giftProduct || null;
-  const targetProductId = targetProduct?.id || null;
+  // 현재 충족한 조건의 사은품 목록 (이 중 정확히 1개가 카트에 있어야 함)
+  const eligibleGifts = eligibleCondition?.giftProducts || [];
+  const eligibleGiftIds = eligibleGifts.map((product) => product.id);
+  const eligibleGiftKey = eligibleGiftIds.join(",");
 
-  const targetVariantId = useMemo(() => {
-    if (!targetProduct) return null;
+  const eligibleGiftLines = cartLines.filter((line) =>
+    isEligibleGift(line?.merchandise?.product?.id),
+  );
 
-    const firstAvailableVariant =
-      targetProduct.variants.nodes.find((variant) => variant.availableForSale) ||
-      targetProduct.variants.nodes[0];
+  const eligibleGiftQuantity = eligibleGiftLines.reduce(
+    (sum, line) => sum + Number(line.quantity || 0),
+    0,
+  );
 
-    return firstAvailableVariant?.id || null;
-  }, [targetProduct]);
-
-  const targetGiftLine = cartLines.find((line) => {
-    const productId = line?.merchandise?.product?.id;
-    return productId === targetProductId && isGiftProduct(productId);
-  });
+  const cartGiftProductId =
+    eligibleGiftLines[0]?.merchandise?.product?.id || null;
+  const cartGiftVariantId = eligibleGiftLines[0]?.merchandise?.id || null;
 
   function isGiftProduct(productId) {
     return giftProductIds.includes(productId);
   }
 
+  function isEligibleGift(productId) {
+    return eligibleGiftIds.includes(productId);
+  }
+
+  // 라디오 초기값: 카트에 담긴 사은품 > 현재 선택 유지 > 첫 번째 사은품
+  // ADD / Replace 진행 중(제거 → 추가 사이)에는 선택을 바꾸지 않음
   useEffect(() => {
-    if (!targetProduct) {
-      setSelectedVariants({});
-      return;
+    if (isAddingRef.current) return;
+    setSelectedGiftId((prev) => {
+      if (cartGiftProductId) return cartGiftProductId;
+      if (eligibleGiftIds.includes(prev)) return prev;
+      return eligibleGifts[0]?.id || null;
+    });
+  }, [eligibleGiftKey, cartGiftProductId]);
+
+  // 사은품별 옵션 Select 초기값: 카트에 담긴 variant > 첫 번째 구매 가능한 variant
+  useEffect(() => {
+    const initial = {};
+    for (const product of eligibleGifts) {
+      initial[product.id] =
+        product.id === cartGiftProductId && cartGiftVariantId
+          ? cartGiftVariantId
+          : getDefaultVariant(product)?.id;
     }
-    if (targetVariantId) {
-      setSelectedVariants({ [targetProduct.id]: targetVariantId });
-    }
-  }, [targetProduct, targetVariantId]);
+    setSelectedVariants(initial);
+  }, [eligibleGiftKey, cartGiftProductId, cartGiftVariantId]);
 
   // 잘못된 tier의 gift 자동 제거
   useEffect(() => {
     async function syncGiftTier() {
-      if (loading) return; 
+      if (loading) return;
       if (isRemovingRef.current) return;
       if (collectionsLoading) return;
       if (!instructions?.lines?.canRemoveCartLine) return;
 
       const giftLines = cartLines.filter((line) =>
-        isGiftProduct(line?.merchandise?.product?.id)
+        isGiftProduct(line?.merchandise?.product?.id),
       );
 
-      const linesToRemove = giftLines.filter((line) => {
-        const productId = line?.merchandise?.product?.id;
-        if (!targetProductId) return true;
-        return productId !== targetProductId;
-      });
+      const linesToRemove = giftLines.filter(
+        (line) => !isEligibleGift(line?.merchandise?.product?.id),
+      );
 
       if (!linesToRemove.length) return;
 
@@ -420,36 +441,28 @@ function Extension() {
     }
 
     syncGiftTier();
-  }, [cartLines, giftProductIds, targetProductId, instructions, loading, collectionsLoading]);
+  }, [
+    cartLines,
+    giftProductIds,
+    eligibleGiftKey,
+    instructions,
+    loading,
+    collectionsLoading,
+  ]);
 
-  // gift는 product 기준 총 1개로 고정 (variant가 여러 개로 나뉘어 담겨도 합쳐서 1개)
+  // gift는 목록 전체 기준 총 1개로 고정 (여러 사은품/variant가 담겨도 첫 라인 1개만 남김)
   useEffect(() => {
     async function normalizeGiftQuantity() {
       if (isNormalizingGiftQtyRef.current) return;
+      if (isAddingRef.current) return; // Replace 진행 중에는 건너뜀
       if (!instructions?.lines?.canUpdateCartLine) return;
 
-      const giftLines = cartLines.filter((line) =>
-        isGiftProduct(line?.merchandise?.product?.id)
-      );
+      if (!eligibleGiftLines.length) return;
 
-      if (!giftLines.length) return;
+      const [keep, ...extra] = eligibleGiftLines;
 
-      const linesByProduct = new Map();
-      for (const line of giftLines) {
-        const productId = line?.merchandise?.product?.id;
-        if (!linesByProduct.has(productId)) linesByProduct.set(productId, []);
-        linesByProduct.get(productId).push(line);
-      }
-
-      const linesToUpdate = [];
-      const linesToRemove = [];
-
-      for (const lines of linesByProduct.values()) {
-        const [keep, ...extra] = lines;
-
-        if (keep.quantity !== 1) linesToUpdate.push(keep);
-        if (extra.length) linesToRemove.push(...extra);
-      }
+      const linesToUpdate = keep.quantity !== 1 ? [keep] : [];
+      const linesToRemove = extra;
 
       if (linesToRemove.length && !instructions?.lines?.canRemoveCartLine) {
         // 삭제 권한이 없으면 이번 사이클은 건너뛰고 다음 변경을 기다림
@@ -483,7 +496,7 @@ function Extension() {
     }
 
     normalizeGiftQuantity();
-  }, [cartLines, giftProductIds, instructions]);
+  }, [cartLines, eligibleGiftKey, instructions]);
 
   // ── GWP 데이터 fetch ─────────────────────────────────────────
 
@@ -578,7 +591,22 @@ function Extension() {
         return;
       }
 
-      setGwp(parseGwp(metaobject));
+      const parsed = parseGwp(metaobject);
+
+      // 이미지 placeholder 확인용
+      console.log(
+        "[GWP DEBUG] gift images",
+        parsed.conditions.flatMap((c) =>
+          c.giftProducts.map((p) => ({
+            condition: c.conditionTitle,
+            product: p.title,
+            featuredImage: p.featuredImage?.url || null,
+            variantImages: p.variants.nodes.map((v) => v.image?.url || null),
+          })),
+        ),
+      );
+
+      setGwp(parsed);
     } catch (error) {
       console.error("fetchGwp error", error);
       setGwp(null);
@@ -629,7 +657,8 @@ function Extension() {
   function parseGwp(metaobject) {
     const fields = getFieldsMap(metaobject.fields);
     const conditionNodes =
-      metaobject.fields.find((f) => f.key === "conditions")?.references?.nodes || [];
+      metaobject.fields.find((f) => f.key === "conditions")?.references
+        ?.nodes || [];
 
     return {
       id: metaobject.id,
@@ -657,8 +686,19 @@ function Extension() {
       // collection: getReferenceByKey(metaobject.fields, "collection"),
       // collectionOnly: fields.collection_only === "true",
       // collectionQuantity: fields.collection_quantity,
-      giftProduct: getReferenceByKey(metaobject.fields, "gift_product"),
+      giftProducts: toGiftList(metaobject.fields),
     };
+  }
+
+  // 사은품은 항상 배열: 1개면 단일 사은품, 2개 이상이면 N개 중 1개 선택
+  function toGiftList(fields) {
+    const listField = fields.find((f) => f.key === "gift_products");
+    return (listField?.references?.nodes || []).filter((p) => p?.id);
+  }
+
+  function getDefaultVariant(product) {
+    const variants = product?.variants?.nodes || [];
+    return variants.find((variant) => variant.availableForSale) || variants[0];
   }
 
   function parseConditionTypes(value) {
@@ -710,6 +750,7 @@ function Extension() {
 
     isAddingRef.current = true;
     setIsAdding(true);
+    setAddingVariantId(variantId);
 
     try {
       await shopify.applyCartLinesChange({
@@ -720,6 +761,37 @@ function Extension() {
     } finally {
       isAddingRef.current = false;
       setIsAdding(false);
+      setAddingVariantId(null);
+    }
+  }
+
+  // 기존 사은품 라인 제거 후 새 variant 추가
+  async function replaceGift(variantId) {
+    if (isAddingRef.current) return;
+
+    isAddingRef.current = true;
+    setIsAdding(true);
+    setAddingVariantId(variantId);
+
+    try {
+      for (const line of eligibleGiftLines) {
+        await shopify.applyCartLinesChange({
+          type: "removeCartLine",
+          id: line.id,
+          quantity: line.quantity,
+        });
+      }
+      await shopify.applyCartLinesChange({
+        type: "addCartLine",
+        merchandiseId: variantId,
+        quantity: 1,
+      });
+    } catch (error) {
+      console.error("replaceGift error", error);
+    } finally {
+      isAddingRef.current = false;
+      setIsAdding(false);
+      setAddingVariantId(null);
     }
   }
 
@@ -734,24 +806,33 @@ function Extension() {
     if (loading || collectionsLoading) return { behavior: "allow" };
     if (!eligibleCondition) return { behavior: "allow" };
 
-    const hasGwp = cartLines.some(
-      (line) => line?.merchandise?.product?.id === targetProductId
-    );
-
-    if (!hasGwp) {
+    // 목록 중 정확히 1개 (quantity 합산)
+    if (eligibleGiftQuantity === 0) {
       return {
         behavior: "block",
-        reason: "Please select your complimentary anniversary gift before completing checkout.",
+        reason:
+          "Please select your complimentary anniversary gift before completing checkout.",
+      };
+    }
+
+    if (eligibleGiftQuantity > 1) {
+      return {
+        behavior: "block",
+        reason: "Only one complimentary gift can be added per order.",
       };
     }
 
     return { behavior: "allow" };
   });
 
-
   if (loading || collectionsLoading) {
     return (
-      <s-box background="subdued" borderRadius="base" borderWidth="base" padding="base">
+      <s-box
+        background="subdued"
+        borderRadius="base"
+        borderWidth="base"
+        padding="base"
+      >
         <s-stack direction="inline" gap="small-100" alignItems="center">
           <s-spinner />
           <s-text>Loading gift…</s-text>
@@ -761,82 +842,300 @@ function Extension() {
   }
 
   if (!eligibleCondition) return null;
-  if (!targetProduct) return null;
-  if (targetGiftLine) return null;
+  if (!eligibleGifts.length) return null;
 
-  const variants = targetProduct.variants.nodes;
-  const defaultVariant =
-    variants.find((variant) => variant.availableForSale) || variants[0];
+  const isMultiGift = eligibleGifts.length > 1;
 
-  const selectedVariantId = selectedVariants[targetProduct.id] || defaultVariant?.id;
-  const selectedVariant = variants.find((variant) => variant.id === selectedVariantId);
+  // 사은품 1개: 담은 뒤에는 기존처럼 숨김 (옵션 변경은 line edit 기능 사용)
+  if (!isMultiGift && eligibleGiftLines.length) return null;
 
-  if (!selectedVariant) return null;
+  // 사은품 1개: 기존 레이아웃 (이미지 | 옵션 Select + ADD)
+  function renderSingleGift(product) {
+    const variants = product.variants.nodes;
+    const selectedVariantId =
+      selectedVariants[product.id] || getDefaultVariant(product)?.id;
+    const selectedVariant = variants.find(
+      (variant) => variant.id === selectedVariantId,
+    );
+
+    if (!selectedVariant) return null;
+
+    return (
+      <s-grid
+        gridTemplateColumns="auto minmax(0, 1fr)"
+        gap="base"
+        alignItems="center"
+      >
+        <s-product-thumbnail
+          src={selectedVariant?.image?.url || product.featuredImage?.url}
+        />
+
+        <s-grid
+          gridTemplateColumns="minmax(0, 1fr) auto"
+          gap="small-100"
+          alignItems="end"
+        >
+          <s-box minInlineSize="0">
+            <s-select
+              label="Option"
+              value={selectedVariantId}
+              onChange={(event) =>
+                handleVariantChange(product.id, event.target.value)
+              }
+            >
+              {variants.map((variant) => (
+                <s-option key={variant.id} value={variant.id}>
+                  {variant.title}
+                </s-option>
+              ))}
+            </s-select>
+          </s-box>
+
+          {isInCart(selectedVariantId) ? (
+            <s-box>
+              <s-text>1 item added</s-text>
+            </s-box>
+          ) : (
+            <s-button
+              size="small"
+              variant="primary"
+              disabled={
+                isAdding ||
+                !selectedVariant?.availableForSale ||
+                !instructions?.lines?.canAddCartLine
+              }
+              onClick={() => addToCart(selectedVariantId)}
+            >
+              ADD
+            </s-button>
+          )}
+        </s-grid>
+      </s-grid>
+    );
+  }
+
+  // 사은품 2개 이상 카드: 이미지 | 상품명 + 옵션 Select | 버튼
+  function renderGiftRow(product) {
+    const variants = product.variants.nodes;
+    const selectedVariantId =
+      selectedVariants[product.id] || getDefaultVariant(product)?.id;
+    const selectedVariant = variants.find(
+      (variant) => variant.id === selectedVariantId,
+    );
+
+    if (!selectedVariant) return null;
+
+    const isSelectedInCart = isInCart(selectedVariantId);
+
+    // 담긴 사은품 카드는 두꺼운 테두리 + 흰 배경 + 체크 배지로 강조
+    return (
+      <s-box
+        key={product.id}
+        background={isSelectedInCart ? "base" : undefined}
+        borderWidth="base"
+        borderRadius="base"
+        padding="base"
+      >
+        {/* 이미지 | 상품명 / (옵션 Select + 버튼 같은 줄) */}
+        <s-grid
+          gridTemplateColumns="auto minmax(0, 1fr)"
+          gap="base"
+          alignItems="center"
+        >
+          <s-product-thumbnail
+            src={selectedVariant?.image?.url || product.featuredImage?.url}
+          />
+
+          <s-box minInlineSize="0">
+            <s-stack gap="small-200">
+              <s-text emphasis="bold">{product.title}</s-text>
+
+              {/* 버튼 칸은 내용 크기만 차지 → 옵션 Select가 남는 폭을 채움 */}
+              {renderOptionRow(product, selectedVariant)}
+            </s-stack>
+          </s-box>
+        </s-grid>
+      </s-box>
+    );
+  }
+
+  // 옵션 Select + 버튼(ADD / Replace / Added) 한 줄 (카드·라디오 공용)
+  // 버튼 칸은 내용 크기만 차지 → 옵션 Select가 남는 폭을 채움
+  // showAdded: false면 Added 표시 생략 (라디오는 상품명 줄 오른쪽에 이미 표시)
+  function renderOptionRow(product, selectedVariant, showAdded = true) {
+    const variants = product.variants.nodes;
+    const selectedVariantId = selectedVariant.id;
+    const isSelectedInCart = isInCart(selectedVariantId);
+    const hasOtherGift = !isSelectedInCart && eligibleGiftLines.length > 0;
+
+    return (
+      <s-grid
+        gridTemplateColumns="minmax(0, 1fr) auto"
+        gap="small-100"
+        alignItems="center"
+      >
+        <s-box minInlineSize="0">
+          <s-select
+            label="Option"
+            value={selectedVariantId}
+            onChange={(event) =>
+              handleVariantChange(product.id, event.target.value)
+            }
+          >
+            {variants.map((variant) => (
+              <s-option key={variant.id} value={variant.id}>
+                {variant.title}
+              </s-option>
+            ))}
+          </s-select>
+        </s-box>
+
+        {isSelectedInCart ? (
+          showAdded ? (
+            <s-stack direction="inline" alignItems="center" gap="small-200">
+              <s-icon type="check-circle" tone="success" size="small" />
+              <s-text tone="success">Added</s-text>
+            </s-stack>
+          ) : (
+            <s-box />
+          )
+        ) : hasOtherGift ? (
+          <s-button
+            inlineSize="fit-content"
+            variant="secondary"
+            loading={addingVariantId === selectedVariantId}
+            disabled={
+              isAdding ||
+              !selectedVariant?.availableForSale ||
+              !instructions?.lines?.canAddCartLine ||
+              !instructions?.lines?.canRemoveCartLine
+            }
+            onClick={() => replaceGift(selectedVariantId)}
+          >
+            Replace
+          </s-button>
+        ) : (
+          <s-button
+            inlineSize="fit-content"
+            variant="primary"
+            loading={addingVariantId === selectedVariantId}
+            disabled={
+              isAdding ||
+              !selectedVariant?.availableForSale ||
+              !instructions?.lines?.canAddCartLine
+            }
+            onClick={() => addToCart(selectedVariantId)}
+          >
+            ADD
+          </s-button>
+        )}
+      </s-grid>
+    );
+  }
+
+  // 사은품 2개 이상 라디오: 사은품을 라디오로 고르고, 선택된 항목 아래에만 옵션 Select + 버튼 표시
+  // 라디오 선택은 화면 상태일 뿐, 카트 변경은 ADD / Replace 버튼으로만 일어남
+  function renderGiftRadioList() {
+    const activeGiftId = eligibleGiftIds.includes(selectedGiftId)
+      ? selectedGiftId
+      : eligibleGiftIds[0];
+
+    return (
+      <s-choice-list
+        name="gwp-gift"
+        label="Choose your gift"
+        labelAccessibilityVisibility="exclusive"
+        values={[activeGiftId]}
+        onChange={(event) => setSelectedGiftId(event.currentTarget.values[0])}
+      >
+        {eligibleGifts.map((product) => {
+          const selectedVariantId =
+            selectedVariants[product.id] || getDefaultVariant(product)?.id;
+          const selectedVariant = product.variants.nodes.find(
+            (variant) => variant.id === selectedVariantId,
+          );
+          const isGiftInCart = eligibleGiftLines.some(
+            (line) => line?.merchandise?.product?.id === product.id,
+          );
+
+          return (
+            <s-choice key={product.id} value={product.id}>
+              {/* 이미지 | 상품명 | 담긴 사은품이면 맨 오른쪽에 Added */}
+              <s-grid
+                gridTemplateColumns="auto minmax(0, 1fr) auto"
+                gap="base"
+                alignItems="center"
+              >
+                <s-product-thumbnail
+                  src={
+                    selectedVariant?.image?.url || product.featuredImage?.url
+                  }
+                />
+                <s-text>{product.title}</s-text>
+                {isGiftInCart ? (
+                  <s-stack
+                    direction="inline"
+                    alignItems="center"
+                    gap="small-200"
+                  >
+                    <s-icon type="check-circle" tone="success" size="small" />
+                    <s-text tone="success">Added</s-text>
+                  </s-stack>
+                ) : (
+                  <s-box />
+                )}
+              </s-grid>
+
+              {selectedVariant && (
+                <s-box slot="selected-content">
+                  {renderOptionRow(product, selectedVariant, false)}
+                </s-box>
+              )}
+            </s-choice>
+          );
+        })}
+      </s-choice-list>
+    );
+  }
 
   return (
-    <s-box background="subdued" borderRadius="base" borderWidth="base" padding="base">
+    <s-box
+      background="subdued"
+      borderRadius="base"
+      borderWidth="base"
+      padding="base"
+    >
       <s-section>
         <s-stack gap="small-100">
           <s-text size="medium" emphasis="bold">
-            YOUR COMPLIMENTARY GIFT 
+            YOUR COMPLIMENTARY GIFT
           </s-text>
 
-          <s-stack gap="none">
-            <s-text>Your order is eligible for the gift below.</s-text>
-            <s-text>Select your option to add it to your order.</s-text>
-          </s-stack>
+          {isMultiGift ? (
+            <s-stack paddingBlockEnd="small-100">
+              <s-text>
+                Your order is eligible for 1 of {eligibleGifts.length} gifts.
+              </s-text>
+              <s-text>Select your option to add it to your order.</s-text>
+            </s-stack>
+          ) : (
+            <s-stack gap="none">
+              <s-text>Your order is eligible for the gift below.</s-text>
+              <s-text>Select your option to add it to your order.</s-text>
+            </s-stack>
+          )}
 
-          <s-grid
-            gridTemplateColumns="auto minmax(0, 1fr)"
-            gap="base"
-            alignItems="center"
-          >
-            <s-product-thumbnail
-              src={selectedVariant?.image?.url || targetProduct.featuredImage?.url}
-            />
-
-            <s-grid
-              gridTemplateColumns="minmax(0, 1fr) auto"
-              gap="small-100"
-              alignItems="end"
-            >
-              <s-box minInlineSize="0">
-                <s-select
-                  label="Option"
-                  value={selectedVariantId}
-                  onChange={(event) =>
-                    handleVariantChange(targetProduct.id, event.target.value)
-                  }
-                >
-                  {variants.map((variant) => (
-                    <s-option key={variant.id} value={variant.id}>
-                      {variant.title} - {variant.price.amount}{" "}
-                      {variant.price.currencyCode}
-                    </s-option>
-                  ))}
-                </s-select>
-              </s-box>
-
-              {isInCart(selectedVariantId) ? (
-                <s-box>
-                  <s-text>1 item added</s-text>
-                </s-box>
-              ) : (
-                <s-button
-                  size="small"
-                  variant="primary"
-                  disabled={
-                    isAdding ||
-                    !selectedVariant?.availableForSale ||
-                    !instructions?.lines?.canAddCartLine
-                  }
-                  onClick={() => addToCart(selectedVariantId)}
-                >
-                  ADD
-                </s-button>
-              )}
-            </s-grid>
-          </s-grid>
+          {isMultiGift ? (
+            MULTI_GIFT_LAYOUT === "radio" ? (
+              renderGiftRadioList()
+            ) : (
+              <s-stack gap="small-100">
+                {eligibleGifts.map((product) => renderGiftRow(product))}
+              </s-stack>
+            )
+          ) : (
+            renderSingleGift(eligibleGifts[0])
+          )}
         </s-stack>
       </s-section>
     </s-box>

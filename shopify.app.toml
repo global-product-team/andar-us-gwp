@@ -95,9 +95,10 @@ description = "Gift with purchase condition"
   name = "Collection Quantity"
   type = "number_integer"
 
-  [metaobjects.app.gwp_condition.fields.gift_product]
-  name = "Gift Product"
-  type = "product_reference"
+  [metaobjects.app.gwp_condition.fields.gift_products]
+  name = "Gift Products"
+  description = "Customer selects 1 of these gifts."
+  type = "list.product_reference"
   required = true
 
 

@@ -36,6 +36,7 @@ query CartValidationsGenerateRunInput {
       }
     }
     lines {
+      quantity
       cost {
         subtotalAmount {
           amount
