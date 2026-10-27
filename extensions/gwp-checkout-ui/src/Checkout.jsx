@@ -36,10 +36,7 @@ function Extension() {
     //   cartTotal: total?.amount, // useTotalAmount()
     // });
     console.log("[GWP DEBUG] cartLines", cartLines);
-    
-    
   }, [cartLines, total]);
- 
 
   const [gwp, setGwp] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -60,7 +57,7 @@ function Extension() {
     }, 0);
 
     return Number(total?.amount || 0) - egiftAmount;
-  }, [cartLines, total])
+  }, [cartLines, total]);
   const currencyCode = "USD";
 
   // GWP condition type: product/collection 비활성화로 인해 주석 처리
@@ -100,8 +97,8 @@ function Extension() {
     return [
       ...new Set(
         conditions.flatMap((condition) =>
-          condition.giftProducts.map((product) => product.id)
-        )
+          condition.giftProducts.map((product) => product.id),
+        ),
       ),
     ];
   }, [conditions]);
@@ -260,7 +257,6 @@ function Extension() {
 
   // ────────────────────────────────────────────────────────────
 
-
   const eligibleCondition = useMemo(() => {
     if (!gwp) return null;
     if (!conditionTypes.length) return null;
@@ -271,7 +267,8 @@ function Extension() {
     //   conditions.some((c) => c.collectionOnly);
 
     // if (hasCollectionCondition && collectionsLoading) return null;
-    if (!isWithinCampaignPeriod(gwp.startDatetime, gwp.endDatetime)) return null;
+    if (!isWithinCampaignPeriod(gwp.startDatetime, gwp.endDatetime))
+      return null;
 
     const filtered = conditions.filter((condition) => {
       if (conditionTypes.includes("amount")) {
@@ -361,15 +358,16 @@ function Extension() {
   const eligibleGiftKey = eligibleGiftIds.join(",");
 
   const eligibleGiftLines = cartLines.filter((line) =>
-    isEligibleGift(line?.merchandise?.product?.id)
+    isEligibleGift(line?.merchandise?.product?.id),
   );
 
   const eligibleGiftQuantity = eligibleGiftLines.reduce(
     (sum, line) => sum + Number(line.quantity || 0),
-    0
+    0,
   );
 
-  const cartGiftProductId = eligibleGiftLines[0]?.merchandise?.product?.id || null;
+  const cartGiftProductId =
+    eligibleGiftLines[0]?.merchandise?.product?.id || null;
   const cartGiftVariantId = eligibleGiftLines[0]?.merchandise?.id || null;
 
   function isGiftProduct(productId) {
@@ -395,17 +393,17 @@ function Extension() {
   // 잘못된 tier의 gift 자동 제거
   useEffect(() => {
     async function syncGiftTier() {
-      if (loading) return; 
+      if (loading) return;
       if (isRemovingRef.current) return;
       if (collectionsLoading) return;
       if (!instructions?.lines?.canRemoveCartLine) return;
 
       const giftLines = cartLines.filter((line) =>
-        isGiftProduct(line?.merchandise?.product?.id)
+        isGiftProduct(line?.merchandise?.product?.id),
       );
 
       const linesToRemove = giftLines.filter(
-        (line) => !isEligibleGift(line?.merchandise?.product?.id)
+        (line) => !isEligibleGift(line?.merchandise?.product?.id),
       );
 
       if (!linesToRemove.length) return;
@@ -428,7 +426,14 @@ function Extension() {
     }
 
     syncGiftTier();
-  }, [cartLines, giftProductIds, eligibleGiftKey, instructions, loading, collectionsLoading]);
+  }, [
+    cartLines,
+    giftProductIds,
+    eligibleGiftKey,
+    instructions,
+    loading,
+    collectionsLoading,
+  ]);
 
   // gift는 목록 전체 기준 총 1개로 고정 (여러 사은품/variant가 담겨도 첫 라인 1개만 남김)
   useEffect(() => {
@@ -582,8 +587,8 @@ function Extension() {
             product: p.title,
             featuredImage: p.featuredImage?.url || null,
             variantImages: p.variants.nodes.map((v) => v.image?.url || null),
-          }))
-        )
+          })),
+        ),
       );
 
       setGwp(parsed);
@@ -637,7 +642,8 @@ function Extension() {
   function parseGwp(metaobject) {
     const fields = getFieldsMap(metaobject.fields);
     const conditionNodes =
-      metaobject.fields.find((f) => f.key === "conditions")?.references?.nodes || [];
+      metaobject.fields.find((f) => f.key === "conditions")?.references
+        ?.nodes || [];
 
     return {
       id: metaobject.id,
@@ -785,7 +791,8 @@ function Extension() {
     if (eligibleGiftQuantity === 0) {
       return {
         behavior: "block",
-        reason: "Please select your complimentary anniversary gift before completing checkout.",
+        reason:
+          "Please select your complimentary anniversary gift before completing checkout.",
       };
     }
 
@@ -799,10 +806,14 @@ function Extension() {
     return { behavior: "allow" };
   });
 
-
   if (loading || collectionsLoading) {
     return (
-      <s-box background="subdued" borderRadius="base" borderWidth="base" padding="base">
+      <s-box
+        background="subdued"
+        borderRadius="base"
+        borderWidth="base"
+        padding="base"
+      >
         <s-stack direction="inline" gap="small-100" alignItems="center">
           <s-spinner />
           <s-text>Loading gift…</s-text>
@@ -824,7 +835,9 @@ function Extension() {
     const variants = product.variants.nodes;
     const selectedVariantId =
       selectedVariants[product.id] || getDefaultVariant(product)?.id;
-    const selectedVariant = variants.find((variant) => variant.id === selectedVariantId);
+    const selectedVariant = variants.find(
+      (variant) => variant.id === selectedVariantId,
+    );
 
     if (!selectedVariant) return null;
 
@@ -887,7 +900,9 @@ function Extension() {
     const variants = product.variants.nodes;
     const selectedVariantId =
       selectedVariants[product.id] || getDefaultVariant(product)?.id;
-    const selectedVariant = variants.find((variant) => variant.id === selectedVariantId);
+    const selectedVariant = variants.find(
+      (variant) => variant.id === selectedVariantId,
+    );
 
     if (!selectedVariant) return null;
 
@@ -899,7 +914,7 @@ function Extension() {
       <s-box
         key={product.id}
         background={isSelectedInCart ? "base" : undefined}
-        borderWidth={isSelectedInCart ? "large-100" : "base"}
+        borderWidth="base"
         borderRadius="base"
         padding="base"
       >
@@ -940,7 +955,11 @@ function Extension() {
                 </s-box>
 
                 {isSelectedInCart ? (
-                  <s-stack direction="inline" alignItems="center" gap="small-200">
+                  <s-stack
+                    direction="inline"
+                    alignItems="center"
+                    gap="small-200"
+                  >
                     <s-icon type="check-circle" tone="success" size="small" />
                     <s-text tone="success">Added</s-text>
                   </s-stack>
@@ -981,7 +1000,12 @@ function Extension() {
   }
 
   return (
-    <s-box background="subdued" borderRadius="base" borderWidth="base" padding="base">
+    <s-box
+      background="subdued"
+      borderRadius="base"
+      borderWidth="base"
+      padding="base"
+    >
       <s-section>
         <s-stack gap="small-100">
           <s-text size="medium" emphasis="bold">
@@ -989,9 +1013,12 @@ function Extension() {
           </s-text>
 
           {isMultiGift ? (
-            <s-box paddingBlockEnd="small-100">
-              <s-text>Choose 1 of {eligibleGifts.length} complimentary gifts.</s-text>
-            </s-box>
+            <s-stack paddingBlockEnd="small-100">
+              <s-text>
+                Your order is eligible for 1 of {eligibleGifts.length} gifts.
+              </s-text>
+              <s-text>Select your option to add it to your order.</s-text>
+            </s-stack>
           ) : (
             <s-stack gap="none">
               <s-text>Your order is eligible for the gift below.</s-text>
