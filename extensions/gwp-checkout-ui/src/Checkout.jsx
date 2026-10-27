@@ -14,7 +14,7 @@ export default function extension() {
 
 const GWP_HANDLE = "app--417617707009--gwp-gzaxwiiz";
 const GWP_TYPE = "app--417617707009--gwp";
-const EGIFT_PRODUCT_ID = "14858264871282";
+const EGIFT_PRODUCT_ID = "gid://shopify/Product/14858264871282";
 
 function Extension() {
   const cartLines = useCartLines();

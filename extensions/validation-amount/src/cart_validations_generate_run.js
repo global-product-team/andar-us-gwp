@@ -1,6 +1,6 @@
 // @ts-check
 
-const EGIFT_PRODUCT_ID = "14858264871282";
+const EGIFT_PRODUCT_ID = "gid://shopify/Product/14858264871282";
 
 const GWP_CONDITIONS = [
   {
@@ -73,8 +73,7 @@ export function cartValidationsGenerateRun(input) {
   const eGiftAmount = cartLines.reduce((sum, line) => {
     if (line?.merchandise?.__typename !== "ProductVariant") return sum;
     if (line?.merchandise?.product?.id !== EGIFT_PRODUCT_ID) return sum;
-
-    return sum + getLineActualAmount(line); // 수정
+    return sum + getLineActualAmount(line);
   }, 0);
 
   const totalAmount = cartTotalAmount - eGiftAmount;
